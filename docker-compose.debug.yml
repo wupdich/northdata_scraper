@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  northdata-scraper:
+    volumes:
+      # Mount X11 socket for displaying the browser window
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      # Pass display variable for X11
+      - DISPLAY=${DISPLAY}
+      # Ensure we're in non-headless mode
+      - BROWSER_HEADLESS=false
+    # For security, drop capabilities except those needed
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
