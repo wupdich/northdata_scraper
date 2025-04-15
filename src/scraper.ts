@@ -376,7 +376,25 @@ export class NorthDataScraper {
         // Apply the empty element removal
         removeEmptyElements(sectionClone);
         
-        return sectionClone.outerHTML;
+        // Get the HTML content
+        let html = sectionClone.outerHTML;
+        
+        // Remove unnecessary whitespace
+        html = html
+          // Replace multiple spaces with a single space
+          .replace(/\s+/g, ' ')
+          // Remove spaces between tags
+          .replace(/>\s+</g, '><')
+          // Remove spaces at the beginning of lines
+          .replace(/^\s+/gm, '')
+          // Remove spaces at the end of lines
+          .replace(/\s+$/gm, '')
+          // Normalize newlines
+          .replace(/\n+/g, '\n')
+          // Remove whitespace around specific tags
+          .replace(/\s*(<\/?(?:div|p|section|table|tr|td|th|ul|ol|li|h[1-6])[^>]*>)\s*/g, '$1');
+        
+        return html;
       });
       
       const currentUrl = page.url();

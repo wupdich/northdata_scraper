@@ -54,6 +54,7 @@ GET /page?url=https://www.northdata.de/...
 Returns cleaned HTML content of a specific page, with:
 - Only the main content section
 - No JavaScript, CSS, links, images, or non-informational elements
+- Minimal whitespace to reduce token count for downstream AI processing
 
 ### Health Check
 ```
