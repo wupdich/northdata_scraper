@@ -242,7 +242,7 @@ export class NorthDataScraper {
     }
   }
 
- /**
+/**
  * Get page content from a specific northdata.de URL
  */
 public async getPageContent(url: string, retryCount = 0): Promise<PageContentResult> {
@@ -271,20 +271,24 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
     await navigateAndWait(page, url);
 
     // =========================================================================
-    // == CHANGE 1: Wait longer for dynamic content (SVGs) to load.
+    // == CHANGE 1 (IMPROVED): Wait for the "loading" placeholder to disappear.
     // =========================================================================
-    // We explicitly wait for an SVG element to be present in the main content section.
-    // This is a more reliable way to ensure client-side rendered charts have loaded
-    // than just relying on network idle. We use a try/catch because not all
-    // pages will have an SVG, and we don't want to fail if one isn't found.
+    // This is the most reliable way to wait for dynamic content. We wait until
+    // the text "Netzwerk wird geladen" is no longer present on the page.
     try {
-      console.log('Waiting for SVG elements to render...');
-      await page.waitForSelector('main section svg', { timeout: 15000 }); // Wait up to 15 seconds
-      console.log('SVG element found. Proceeding to extract content.');
+      console.log('Waiting for "Netzwerk wird geladen..." placeholder to disappear.');
+      await page.waitForFunction(
+        () => !document.body.innerText.includes('Netzwerk wird geladen'),
+        { timeout: 20000 } // Wait up to 20 seconds for the chart to load
+      );
+      console.log('Loading placeholder has disappeared. The chart should be loaded.');
     } catch (e) {
-      console.log('No SVG element found or timeout reached. Continuing extraction anyway.');
+      console.log('Did not find the loading placeholder or it did not disappear in time. Continuing anyway.');
     }
-    
+
+    // As a final check, we can add a small static delay to ensure rendering is complete.
+    await new Promise(resolve => setTimeout(resolve, 1000)); // 1-second safety delay
+
     // Extract only the main content section and clean the HTML
     const cleanedHtml = await page.evaluate(() => {
       // Find the main content section
@@ -318,8 +322,6 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       // Remove all inline styles, EXCEPT for those on SVG elements or their children
       const elementsWithStyle = sectionClone.querySelectorAll('[style]');
       elementsWithStyle.forEach(el => {
-        // The .closest('svg') method checks if the element or any of its ancestors is an SVG.
-        // If it's not inside an SVG, we can safely remove its style attribute.
         if (!el.closest('svg')) {
           el.removeAttribute('style');
         }
@@ -336,13 +338,10 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       // Remove all links (a tags) but keep their text content
       const links = sectionClone.querySelectorAll('a');
       links.forEach(link => {
-        // Create a text node with the link's text content
         if (link.textContent) {
           const textNode = document.createTextNode(link.textContent);
-          // Replace the link with just its text content
           link.parentNode?.replaceChild(textNode, link);
         } else {
-          // If the link has no text content, just remove it
           link.remove();
         }
       });
@@ -370,12 +369,9 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       // Remove all event handlers (onclick, onmouseover, etc.)
       const allElements = sectionClone.querySelectorAll('*');
       allElements.forEach(el => {
-        // Don't modify attributes on SVG elements or their children
         if (el.closest('svg')) return;
-
         const attributes = Array.from(el.attributes);
         attributes.forEach(attr => {
-          // Remove all event handlers and non-essential attributes
           if (attr.name.startsWith('on') || 
               attr.name === 'href' || 
               attr.name === 'src' || 
@@ -387,46 +383,16 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
         });
       });
       
-      // Remove empty elements that don't contain text
-      const removeEmptyElements = (element: Element) => {
-        // Don't process SVGs and their children for removal
-        if (element.closest('svg')) return;
-
-        const children = Array.from(element.children);
-        
-        // Process children first (depth-first)
-        children.forEach(child => removeEmptyElements(child));
-        
-        // Check if element is now empty (no text content and no children)
-        if (!element.textContent?.trim() && element.children.length === 0) {
-          // Don't remove essential structural elements
-          if (element.tagName.toLowerCase() !== 'div' && 
-              element.tagName.toLowerCase() !== 'section' && 
-              element.tagName.toLowerCase() !== 'article') {
-            element.remove();
-          }
-        }
-      };
-      
-      // Apply the empty element removal
-      removeEmptyElements(sectionClone);
-      
       // Get the HTML content
       let html = sectionClone.outerHTML;
       
       // Remove unnecessary whitespace
       html = html
-        // Replace multiple spaces with a single space
         .replace(/\s+/g, ' ')
-        // Remove spaces between tags
         .replace(/>\s+</g, '><')
-        // Remove spaces at the beginning of lines
         .replace(/^\s+/gm, '')
-        // Remove spaces at the end of lines
         .replace(/\s+$/gm, '')
-        // Normalize newlines
         .replace(/\n+/g, '\n')
-        // Remove whitespace around specific tags
         .replace(/\s*(<\/?(?:div|p|section|table|tr|td|th|ul|ol|li|h[1-6])[^>]*>)\s*/g, '$1');
       
       return html;
@@ -449,7 +415,6 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
     // Retry logic
     if (retryCount < config.browser.maxRetries) {
       console.log(`Page content request failed, retrying (${retryCount + 1}/${config.browser.maxRetries})...`);
-      // Reset browser for next attempt
       await this.close();
       await this.initialize();
       return this.getPageContent(url, retryCount + 1);
