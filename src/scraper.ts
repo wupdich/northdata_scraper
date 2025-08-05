@@ -242,188 +242,223 @@ export class NorthDataScraper {
     }
   }
 
-  /**
-   * Get page content from a specific northdata.de URL
-   */
-  public async getPageContent(url: string, retryCount = 0): Promise<PageContentResult> {
-    if (!this.browser) {
-      await this.initialize();
-    }
+ /**
+ * Get page content from a specific northdata.de URL
+ */
+public async getPageContent(url: string, retryCount = 0): Promise<PageContentResult> {
+  if (!this.browser) {
+    await this.initialize();
+  }
 
-    if (!this.browser) {
-      throw new Error('Browser initialization failed');
-    }
+  if (!this.browser) {
+    throw new Error('Browser initialization failed');
+  }
 
-    const page = await this.browser.newPage();
+  const page = await this.browser.newPage();
+
+  try {
+    // Set up request interception
+    await setupRequestInterception(page);
     
+    // Set viewport and user agent
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+    
+    // Login if not already logged in
+    await this.login(page);
+    
+    // Navigate to the requested URL
+    await navigateAndWait(page, url);
+
+    // =========================================================================
+    // == CHANGE 1: Wait longer for dynamic content (SVGs) to load.
+    // =========================================================================
+    // We explicitly wait for an SVG element to be present in the main content section.
+    // This is a more reliable way to ensure client-side rendered charts have loaded
+    // than just relying on network idle. We use a try/catch because not all
+    // pages will have an SVG, and we don't want to fail if one isn't found.
     try {
-      // Set up request interception
-      await setupRequestInterception(page);
+      console.log('Waiting for SVG elements to render...');
+      await page.waitForSelector('main section svg', { timeout: 15000 }); // Wait up to 15 seconds
+      console.log('SVG element found. Proceeding to extract content.');
+    } catch (e) {
+      console.log('No SVG element found or timeout reached. Continuing extraction anyway.');
+    }
+    
+    // Extract only the main content section and clean the HTML
+    const cleanedHtml = await page.evaluate(() => {
+      // Find the main content section
+      const mainSection = document.evaluate(
+        '/html/body/main/div/section', 
+        document, 
+        null, 
+        XPathResult.FIRST_ORDERED_NODE_TYPE, 
+        null
+      ).singleNodeValue;
       
-      // Set viewport and user agent
-      await page.setViewport({ width: 1280, height: 800 });
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-      
-      // Login if not already logged in
-      await this.login(page);
-      
-      // Navigate to the requested URL
-      await navigateAndWait(page, url);
-      
-      // Extract only the main content section and clean the HTML
-      const cleanedHtml = await page.evaluate(() => {
-        // Find the main content section
-        const mainSection = document.evaluate(
-          '/html/body/main/div/section', 
-          document, 
-          null, 
-          XPathResult.FIRST_ORDERED_NODE_TYPE, 
-          null
-        ).singleNodeValue;
-        
-        if (!mainSection) {
-          return '';
-        }
-        
-        // Clone the section to avoid modifying the original DOM
-        const sectionClone = mainSection.cloneNode(true) as HTMLElement;
-        
-        // Remove all script tags
-        const scripts = sectionClone.querySelectorAll('script');
-        scripts.forEach(script => script.remove());
-        
-        // Remove all style tags
-        const styles = sectionClone.querySelectorAll('style');
-        styles.forEach(style => style.remove());
-        
-        // Remove all inline styles
-        const elementsWithStyle = sectionClone.querySelectorAll('[style]');
-        elementsWithStyle.forEach(el => el.removeAttribute('style'));
-        
-        // Remove all class attributes (which often reference CSS)
-        const elementsWithClass = sectionClone.querySelectorAll('[class]');
-        elementsWithClass.forEach(el => el.removeAttribute('class'));
-        
-        // Remove all links (a tags) but keep their text content
-        const links = sectionClone.querySelectorAll('a');
-        links.forEach(link => {
-          // Create a text node with the link's text content
-          if (link.textContent) {
-            const textNode = document.createTextNode(link.textContent);
-            // Replace the link with just its text content
-            link.parentNode?.replaceChild(textNode, link);
-          } else {
-            // If the link has no text content, just remove it
-            link.remove();
-          }
-        });
-        
-        // Remove all images
-        const images = sectionClone.querySelectorAll('img');
-        images.forEach(img => img.remove());
-        
-        // Remove all buttons
-        const buttons = sectionClone.querySelectorAll('button');
-        buttons.forEach(button => button.remove());
-        
-        // Remove all forms
-        const forms = sectionClone.querySelectorAll('form');
-        forms.forEach(form => form.remove());
-        
-        // Remove all inputs
-        const inputs = sectionClone.querySelectorAll('input');
-        inputs.forEach(input => input.remove());
-        
-        // Remove all iframes
-        const iframes = sectionClone.querySelectorAll('iframe');
-        iframes.forEach(iframe => iframe.remove());
-        
-        // Remove all event handlers (onclick, onmouseover, etc.)
-        const allElements = sectionClone.querySelectorAll('*');
-        allElements.forEach(el => {
-          const attributes = Array.from(el.attributes);
-          attributes.forEach(attr => {
-            // Remove all event handlers and non-essential attributes
-            if (attr.name.startsWith('on') || 
-                attr.name === 'href' || 
-                attr.name === 'src' || 
-                attr.name === 'id' || 
-                attr.name === 'target' || 
-                attr.name === 'rel') {
-              el.removeAttribute(attr.name);
-            }
-          });
-        });
-        
-        // Remove empty elements that don't contain text
-        const removeEmptyElements = (element: Element) => {
-          const children = Array.from(element.children);
-          
-          // Process children first (depth-first)
-          children.forEach(child => removeEmptyElements(child));
-          
-          // Check if element is now empty (no text content and no children)
-          if (!element.textContent?.trim() && element.children.length === 0) {
-            // Don't remove essential structural elements
-            if (element.tagName.toLowerCase() !== 'div' && 
-                element.tagName.toLowerCase() !== 'section' && 
-                element.tagName.toLowerCase() !== 'article') {
-              element.remove();
-            }
-          }
-        };
-        
-        // Apply the empty element removal
-        removeEmptyElements(sectionClone);
-        
-        // Get the HTML content
-        let html = sectionClone.outerHTML;
-        
-        // Remove unnecessary whitespace
-        html = html
-          // Replace multiple spaces with a single space
-          .replace(/\s+/g, ' ')
-          // Remove spaces between tags
-          .replace(/>\s+</g, '><')
-          // Remove spaces at the beginning of lines
-          .replace(/^\s+/gm, '')
-          // Remove spaces at the end of lines
-          .replace(/\s+$/gm, '')
-          // Normalize newlines
-          .replace(/\n+/g, '\n')
-          // Remove whitespace around specific tags
-          .replace(/\s*(<\/?(?:div|p|section|table|tr|td|th|ul|ol|li|h[1-6])[^>]*>)\s*/g, '$1');
-        
-        return html;
-      });
-      
-      const currentUrl = page.url();
-      
-      // Add delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, config.browser.requestDelay));
-      
-      await page.close();
-      
-      return {
-        html: cleanedHtml,
-        url: currentUrl,
-      };
-    } catch (error) {
-      await page.close();
-      
-      // Retry logic
-      if (retryCount < config.browser.maxRetries) {
-        console.log(`Page content request failed, retrying (${retryCount + 1}/${config.browser.maxRetries})...`);
-        // Reset browser for next attempt
-        await this.close();
-        await this.initialize();
-        return this.getPageContent(url, retryCount + 1);
+      if (!mainSection) {
+        return '';
       }
       
-      console.error('Page content request failed after retries:', error);
-      throw error;
+      // Clone the section to avoid modifying the original DOM
+      const sectionClone = mainSection.cloneNode(true) as HTMLElement;
+      
+      // Remove all script tags
+      const scripts = sectionClone.querySelectorAll('script');
+      scripts.forEach(script => script.remove());
+      
+      // Remove all style tags (as they are external or generic)
+      const styles = sectionClone.querySelectorAll('style');
+      styles.forEach(style => style.remove());
+      
+      // =========================================================================
+      // == CHANGE 2: Preserve styling for SVG elements and their children.
+      // =========================================================================
+      
+      // Remove all inline styles, EXCEPT for those on SVG elements or their children
+      const elementsWithStyle = sectionClone.querySelectorAll('[style]');
+      elementsWithStyle.forEach(el => {
+        // The .closest('svg') method checks if the element or any of its ancestors is an SVG.
+        // If it's not inside an SVG, we can safely remove its style attribute.
+        if (!el.closest('svg')) {
+          el.removeAttribute('style');
+        }
+      });
+      
+      // Remove all class attributes, EXCEPT for those on SVG elements or their children
+      const elementsWithClass = sectionClone.querySelectorAll('[class]');
+      elementsWithClass.forEach(el => {
+        if (!el.closest('svg')) {
+          el.removeAttribute('class');
+        }
+      });
+
+      // Remove all links (a tags) but keep their text content
+      const links = sectionClone.querySelectorAll('a');
+      links.forEach(link => {
+        // Create a text node with the link's text content
+        if (link.textContent) {
+          const textNode = document.createTextNode(link.textContent);
+          // Replace the link with just its text content
+          link.parentNode?.replaceChild(textNode, link);
+        } else {
+          // If the link has no text content, just remove it
+          link.remove();
+        }
+      });
+      
+      // Remove all images (we want to keep SVGs)
+      const images = sectionClone.querySelectorAll('img');
+      images.forEach(img => img.remove());
+      
+      // Remove all buttons
+      const buttons = sectionClone.querySelectorAll('button');
+      buttons.forEach(button => button.remove());
+      
+      // Remove all forms
+      const forms = sectionClone.querySelectorAll('form');
+      forms.forEach(form => form.remove());
+      
+      // Remove all inputs
+      const inputs = sectionClone.querySelectorAll('input');
+      inputs.forEach(input => input.remove());
+      
+      // Remove all iframes
+      const iframes = sectionClone.querySelectorAll('iframe');
+      iframes.forEach(iframe => iframe.remove());
+      
+      // Remove all event handlers (onclick, onmouseover, etc.)
+      const allElements = sectionClone.querySelectorAll('*');
+      allElements.forEach(el => {
+        // Don't modify attributes on SVG elements or their children
+        if (el.closest('svg')) return;
+
+        const attributes = Array.from(el.attributes);
+        attributes.forEach(attr => {
+          // Remove all event handlers and non-essential attributes
+          if (attr.name.startsWith('on') || 
+              attr.name === 'href' || 
+              attr.name === 'src' || 
+              attr.name === 'id' || 
+              attr.name === 'target' || 
+              attr.name === 'rel') {
+            el.removeAttribute(attr.name);
+          }
+        });
+      });
+      
+      // Remove empty elements that don't contain text
+      const removeEmptyElements = (element: Element) => {
+        // Don't process SVGs and their children for removal
+        if (element.closest('svg')) return;
+
+        const children = Array.from(element.children);
+        
+        // Process children first (depth-first)
+        children.forEach(child => removeEmptyElements(child));
+        
+        // Check if element is now empty (no text content and no children)
+        if (!element.textContent?.trim() && element.children.length === 0) {
+          // Don't remove essential structural elements
+          if (element.tagName.toLowerCase() !== 'div' && 
+              element.tagName.toLowerCase() !== 'section' && 
+              element.tagName.toLowerCase() !== 'article') {
+            element.remove();
+          }
+        }
+      };
+      
+      // Apply the empty element removal
+      removeEmptyElements(sectionClone);
+      
+      // Get the HTML content
+      let html = sectionClone.outerHTML;
+      
+      // Remove unnecessary whitespace
+      html = html
+        // Replace multiple spaces with a single space
+        .replace(/\s+/g, ' ')
+        // Remove spaces between tags
+        .replace(/>\s+</g, '><')
+        // Remove spaces at the beginning of lines
+        .replace(/^\s+/gm, '')
+        // Remove spaces at the end of lines
+        .replace(/\s+$/gm, '')
+        // Normalize newlines
+        .replace(/\n+/g, '\n')
+        // Remove whitespace around specific tags
+        .replace(/\s*(<\/?(?:div|p|section|table|tr|td|th|ul|ol|li|h[1-6])[^>]*>)\s*/g, '$1');
+      
+      return html;
+    });
+    
+    const currentUrl = page.url();
+    
+    // Add delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, config.browser.requestDelay));
+    
+    await page.close();
+    
+    return {
+      html: cleanedHtml,
+      url: currentUrl,
+    };
+  } catch (error) {
+    await page.close();
+    
+    // Retry logic
+    if (retryCount < config.browser.maxRetries) {
+      console.log(`Page content request failed, retrying (${retryCount + 1}/${config.browser.maxRetries})...`);
+      // Reset browser for next attempt
+      await this.close();
+      await this.initialize();
+      return this.getPageContent(url, retryCount + 1);
     }
+    
+    console.error('Page content request failed after retries:', error);
+    throw error;
   }
+}
 
   /**
    * Get suggestions from northdata.de
