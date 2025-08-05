@@ -270,11 +270,8 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
     // Navigate to the requested URL
     await navigateAndWait(page, url);
 
-    // =========================================================================
-    // == CHANGE 1 (IMPROVED): Wait for the "loading" placeholder to disappear.
-    // =========================================================================
-    // This is the most reliable way to wait for dynamic content. We wait until
-    // the text "Netzwerk wird geladen" is no longer present on the page.
+    // Wait for the "loading" placeholder to disappear.
+    // This is the most reliable way to wait for dynamic content.
     try {
       console.log('Waiting for "Netzwerk wird geladen..." placeholder to disappear.');
       await page.waitForFunction(
@@ -286,8 +283,8 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       console.log('Did not find the loading placeholder or it did not disappear in time. Continuing anyway.');
     }
 
-    // As a final check, we can add a small static delay to ensure rendering is complete.
-    await new Promise(resolve => setTimeout(resolve, 1000)); // 1-second safety delay
+    // Add a small static delay to ensure final rendering is complete.
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     // Extract only the main content section and clean the HTML
     const cleanedHtml = await page.evaluate(() => {
@@ -311,29 +308,23 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       const scripts = sectionClone.querySelectorAll('script');
       scripts.forEach(script => script.remove());
       
-      // Remove all style tags (as they are external or generic)
+      // Remove all style tags
       const styles = sectionClone.querySelectorAll('style');
       styles.forEach(style => style.remove());
       
       // =========================================================================
-      // == CHANGE 2: Preserve styling for SVG elements and their children.
+      // == CHANGE REVERTED: Remove styles and classes from ALL elements again.
       // =========================================================================
+      // This section is now identical to your original code, removing inline
+      // styles and classes from every element, including SVGs.
       
-      // Remove all inline styles, EXCEPT for those on SVG elements or their children
+      // Remove all inline styles
       const elementsWithStyle = sectionClone.querySelectorAll('[style]');
-      elementsWithStyle.forEach(el => {
-        if (!el.closest('svg')) {
-          el.removeAttribute('style');
-        }
-      });
+      elementsWithStyle.forEach(el => el.removeAttribute('style'));
       
-      // Remove all class attributes, EXCEPT for those on SVG elements or their children
+      // Remove all class attributes (which often reference CSS)
       const elementsWithClass = sectionClone.querySelectorAll('[class]');
-      elementsWithClass.forEach(el => {
-        if (!el.closest('svg')) {
-          el.removeAttribute('class');
-        }
-      });
+      elementsWithClass.forEach(el => el.removeAttribute('class'));
 
       // Remove all links (a tags) but keep their text content
       const links = sectionClone.querySelectorAll('a');
@@ -369,7 +360,6 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       // Remove all event handlers (onclick, onmouseover, etc.)
       const allElements = sectionClone.querySelectorAll('*');
       allElements.forEach(el => {
-        if (el.closest('svg')) return;
         const attributes = Array.from(el.attributes);
         attributes.forEach(attr => {
           if (attr.name.startsWith('on') || 
