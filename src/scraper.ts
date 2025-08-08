@@ -612,16 +612,78 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
         // Continue even if the placeholder was not detected
       }
 
-      // Ensure the SVG is present in the DOM
+      // Ensure the SVG is present in the DOM and the layout is populated
       await page.waitForSelector('svg[aria-label="Netzwerk"]', { timeout: config.browser.timeout });
+      await page.waitForFunction(
+        () => {
+          const svg = document.querySelector('svg[aria-label="Netzwerk"]');
+          if (!svg) return false;
+          const hasNodes = (svg.querySelectorAll('.node').length + svg.querySelectorAll('a.node').length) > 0;
+          const hasLinks = svg.querySelectorAll('.link').length > 0;
+          const rects = Array.from(svg.querySelectorAll('rect')) as SVGRectElement[];
+          const rectsSized = rects.some(r => {
+            const w = r.getAttribute('width');
+            if (w && parseFloat(w) > 0) return true;
+            try {
+              const bb = r.getBBox();
+              return bb && bb.width > 0;
+            } catch { return false; }
+          });
+          return hasNodes && hasLinks && rectsSized;
+        },
+        { timeout: Math.max(5000, config.browser.timeout / 2) }
+      );
 
       // Small delay to let final layout settle
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Extract the raw SVG markup without altering any attributes
+      // Extract a self-contained SVG by embedding page CSS into the SVG
       const svgMarkup = await page.evaluate(() => {
-        const svg = document.querySelector('svg[aria-label="Netzwerk"]');
-        return svg ? (svg as SVGElement).outerHTML : '';
+        const svg = document.querySelector('svg[aria-label="Netzwerk"]') as SVGElement | null;
+        if (!svg) return '';
+
+        const clone = svg.cloneNode(true) as SVGElement;
+
+        // Ensure namespace attributes for standalone viewing
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        if (!clone.getAttribute('xmlns:xlink')) {
+          clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+        }
+
+        // Collect CSS text from accessible stylesheets and inline <style> tags in the document
+        let cssText = '';
+        // Inline <style> elements in document
+        document.querySelectorAll('style').forEach(styleEl => {
+          if (styleEl.textContent) cssText += styleEl.textContent + '\n';
+        });
+
+        // External stylesheets (might throw for cross-origin; ignore those)
+        const styleSheets = Array.from(document.styleSheets) as CSSStyleSheet[];
+        for (const sheet of styleSheets) {
+          try {
+            const rules = sheet.cssRules;
+            if (!rules) continue;
+            for (const rule of Array.from(rules)) {
+              cssText += rule.cssText + '\n';
+            }
+          } catch (e) {
+            // Ignore cross-origin stylesheets we cannot read
+            continue;
+          }
+        }
+
+        // Embed CSS into the SVG
+        if (cssText.trim().length > 0) {
+          const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+          const styleInSvg = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+          styleInSvg.setAttribute('type', 'text/css');
+          // Wrap in CDATA for XML compatibility
+          styleInSvg.textContent = `/* <![CDATA[ */\n${cssText}\n/* ]]> */`;
+          defs.appendChild(styleInSvg);
+          clone.insertBefore(defs, clone.firstChild);
+        }
+
+        return clone.outerHTML;
       });
 
       const currentUrl = page.url();
