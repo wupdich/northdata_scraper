@@ -573,7 +573,6 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       throw error;
     }
   }
-}
 
   /**
    * Get the raw SVG markup of the network graph for a specific northdata.de page
@@ -655,6 +654,6 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       throw error;
     }
   }
-
+}
 // Create and export a singleton instance
 export const scraper = new NorthDataScraper();
