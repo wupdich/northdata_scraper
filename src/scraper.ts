@@ -637,51 +637,176 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       // Small delay to let final layout settle
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Extract a self-contained SVG by embedding page CSS into the SVG
-      const svgMarkup = await page.evaluate(() => {
+      // Extract a self-contained SVG by embedding computed styles, images, and fonts
+      const svgMarkup = await page.evaluate(async () => {
+        function toArray<T extends NodeListOf<any> | HTMLCollectionOf<any>>(list: T): Element[] {
+          return Array.prototype.slice.call(list) as Element[];
+        }
+
+        async function urlToDataURL(url: string): Promise<string | null> {
+          try {
+            const resp = await fetch(url, { credentials: 'include' });
+            if (!resp.ok) return null;
+            const blob = await resp.blob();
+            const reader = new FileReader();
+            return await new Promise<string>((resolve, reject) => {
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          } catch {
+            return null;
+          }
+        }
+
+        // Replace url(...) occurrences in CSS text with data URIs where possible
+        async function inlineCssUrls(css: string): Promise<string> {
+          const urlRegex = /url\((['"]?)([^'")]+)\1\)/g;
+          const parts: Array<string | Promise<string>> = [];
+          let lastIndex = 0;
+          let match: RegExpExecArray | null;
+          while ((match = urlRegex.exec(css)) !== null) {
+            parts.push(css.slice(lastIndex, match.index));
+            const rawUrl = match[2];
+            // Skip data URLs and fragments
+            if (/^data:/.test(rawUrl) || rawUrl.startsWith('#')) {
+              parts.push(match[0]);
+            } else {
+              const p = (async () => {
+                const data = await urlToDataURL(rawUrl);
+                if (data) return `url("${data}")`;
+                return match![0];
+              })();
+              parts.push(p);
+            }
+            lastIndex = urlRegex.lastIndex;
+          }
+          parts.push(css.slice(lastIndex));
+          const resolved = await Promise.all(parts.map(p => (p instanceof Promise ? p : Promise.resolve(p))));
+          return resolved.join('');
+        }
+
+        async function collectInlineFontFaceCss(): Promise<string> {
+          let out = '';
+          const sheets = Array.from(document.styleSheets) as CSSStyleSheet[];
+          for (const sheet of sheets) {
+            let rules: CSSRuleList | null = null;
+            try {
+              rules = sheet.cssRules;
+            } catch {
+              // cross-origin, ignore
+            }
+            if (!rules) continue;
+            for (const rule of Array.from(rules)) {
+              const isFontFace =
+                (typeof (window as any).CSSFontFaceRule !== 'undefined' && rule instanceof (window as any).CSSFontFaceRule) ||
+                (rule as any).type === 5;
+              if (isFontFace) {
+                let cssText = rule.cssText;
+                cssText = await inlineCssUrls(cssText);
+                out += cssText + '\n';
+              }
+            }
+          }
+          return out;
+        }
+
+        // Inline a whitelist of computed properties for SVG fidelity
+        const STYLE_PROPS = [
+          'fill','fill-opacity','fill-rule',
+          'stroke','stroke-opacity','stroke-width','stroke-linecap','stroke-linejoin','stroke-dasharray','stroke-dashoffset',
+          'opacity',
+          'color',
+          'font','font-family','font-size','font-weight','font-style','font-stretch','font-variant',
+          'letter-spacing','word-spacing','text-anchor','dominant-baseline','alignment-baseline',
+          'paint-order','shape-rendering','image-rendering','vector-effect',
+          'visibility','display',
+          // Clip/Mask/Filter
+          'clip-path','clip-rule','mask','filter',
+          // Cursors and pointer-events
+          'cursor','pointer-events'
+        ];
+
         const svg = document.querySelector('svg[aria-label="Netzwerk"]') as SVGElement | null;
         if (!svg) return '';
 
         const clone = svg.cloneNode(true) as SVGElement;
 
-        // Ensure namespace attributes for standalone viewing
+        // Ensure namespaces for standalone viewing
         clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
         if (!clone.getAttribute('xmlns:xlink')) {
           clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
         }
 
-        // Collect CSS text from accessible stylesheets and inline <style> tags in the document
-        let cssText = '';
-        // Inline <style> elements in document
-        document.querySelectorAll('style').forEach(styleEl => {
-          if (styleEl.textContent) cssText += styleEl.textContent + '\n';
-        });
-
-        // External stylesheets (might throw for cross-origin; ignore those)
-        const styleSheets = Array.from(document.styleSheets) as CSSStyleSheet[];
-        for (const sheet of styleSheets) {
-          try {
-            const rules = sheet.cssRules;
-            if (!rules) continue;
-            for (const rule of Array.from(rules)) {
-              cssText += rule.cssText + '\n';
-            }
-          } catch (e) {
-            // Ignore cross-origin stylesheets we cannot read
-            continue;
+        // Ensure width/height or viewBox present for proper sizing
+        const hasViewBox = !!clone.getAttribute('viewBox');
+        if (!hasViewBox) {
+          const vb = svg.getAttribute('viewBox');
+          if (vb) clone.setAttribute('viewBox', vb);
+          const w = svg.getAttribute('width') || (svg as any).width?.baseVal?.value;
+          const h = svg.getAttribute('height') || (svg as any).height?.baseVal?.value;
+          if (w && h) {
+            clone.setAttribute('width', String(w));
+            clone.setAttribute('height', String(h));
           }
         }
 
-        // Embed CSS into the SVG
-        if (cssText.trim().length > 0) {
+        // Inline computed styles onto each node
+        const origNodes = [svg, ...toArray(svg.querySelectorAll('*'))];
+        const cloneNodes = [clone, ...toArray(clone.querySelectorAll('*'))];
+
+        for (let i = 0; i < origNodes.length; i++) {
+          const origEl = origNodes[i] as Element;
+          const cloneEl = cloneNodes[i] as Element;
+
+          // Skip defs content (keeps original attributes)
+          if (cloneEl.closest('defs')) continue;
+
+          const cs = getComputedStyle(origEl as Element);
+          let styleStr = '';
+          for (const prop of STYLE_PROPS) {
+            const val = cs.getPropertyValue(prop);
+            if (!val) continue;
+            const trimmed = val.trim();
+            if (!trimmed) continue;
+            styleStr += `${prop}: ${trimmed};`;
+          }
+
+          if (styleStr) {
+            const existing = (cloneEl as HTMLElement).getAttribute('style') || '';
+            (cloneEl as HTMLElement).setAttribute('style', existing ? existing + ';' + styleStr : styleStr);
+          }
+
+          // Remove class to avoid external CSS dependency
+          if (cloneEl.hasAttribute('class')) cloneEl.removeAttribute('class');
+        }
+
+        // Inline <image> hrefs to data URIs
+        const imageEls = clone.querySelectorAll('image');
+        await Promise.all(Array.from(imageEls).map(async (img) => {
+          const XLINK = 'http://www.w3.org/1999/xlink';
+          const href = img.getAttribute('href') || img.getAttributeNS(XLINK, 'href');
+          if (!href || /^data:/.test(href) || href.startsWith('#')) return;
+          const data = await urlToDataURL(href);
+          if (data) {
+            img.setAttribute('href', data);
+            img.setAttributeNS(XLINK, 'href', data);
+          }
+        }));
+
+        // Collect and inline only @font-face rules with data URLs
+        const fontCss = await collectInlineFontFaceCss();
+        if (fontCss.trim().length > 0) {
           const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-          const styleInSvg = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-          styleInSvg.setAttribute('type', 'text/css');
-          // Wrap in CDATA for XML compatibility
-          styleInSvg.textContent = `/* <![CDATA[ */\n${cssText}\n/* ]]> */`;
-          defs.appendChild(styleInSvg);
+          const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+          styleEl.setAttribute('type', 'text/css');
+          styleEl.textContent = `/* <![CDATA[ */\n${fontCss}\n/* ]]> */`;
+          defs.appendChild(styleEl);
           clone.insertBefore(defs, clone.firstChild);
         }
+
+        // Remove any scripts for safety
+        clone.querySelectorAll('script').forEach(s => s.remove());
 
         return clone.outerHTML;
       });
