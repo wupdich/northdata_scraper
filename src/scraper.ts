@@ -144,6 +144,11 @@ export interface PageContentResult {
   url: string;
 }
 
+export interface NetworkSvgResult {
+  svg: string;
+  url: string;
+}
+
 export class NorthDataScraper {
   private browser: Browser | null = null;
   private isLoggedIn = false;
@@ -569,6 +574,87 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
     }
   }
 }
+
+  /**
+   * Get the raw SVG markup of the network graph for a specific northdata.de page
+   */
+  public async getNetworkSvg(url: string, retryCount = 0): Promise<NetworkSvgResult> {
+    if (!this.browser) {
+      await this.initialize();
+    }
+
+    if (!this.browser) {
+      throw new Error('Browser initialization failed');
+    }
+
+    const page = await this.browser.newPage();
+
+    try {
+      // Set up request interception
+      await setupRequestInterception(page);
+
+      // Set viewport and user agent
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+
+      // Login if not already logged in
+      await this.login(page);
+
+      // Navigate to the requested URL
+      await navigateAndWait(page, url);
+
+      // Try to wait for the network placeholder to disappear if present
+      try {
+        await page.waitForFunction(
+          () => !document.body.innerText.includes('Netzwerk wird geladen'),
+          { timeout: 20000 }
+        );
+      } catch {
+        // Continue even if the placeholder was not detected
+      }
+
+      // Ensure the SVG is present in the DOM
+      await page.waitForSelector('svg[aria-label="Netzwerk"]', { timeout: config.browser.timeout });
+
+      // Small delay to let final layout settle
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Extract the raw SVG markup without altering any attributes
+      const svgMarkup = await page.evaluate(() => {
+        const svg = document.querySelector('svg[aria-label="Netzwerk"]');
+        return svg ? (svg as SVGElement).outerHTML : '';
+      });
+
+      const currentUrl = page.url();
+
+      // Add delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, config.browser.requestDelay));
+
+      await page.close();
+
+      if (!svgMarkup) {
+        throw new Error('Network SVG not found on the page');
+      }
+
+      return {
+        svg: svgMarkup,
+        url: currentUrl,
+      };
+    } catch (error) {
+      await page.close();
+
+      // Retry logic
+      if (retryCount < config.browser.maxRetries) {
+        console.log(`Network SVG request failed, retrying (${retryCount + 1}/${config.browser.maxRetries})...`);
+        await this.close();
+        await this.initialize();
+        return this.getNetworkSvg(url, retryCount + 1);
+      }
+
+      console.error('Network SVG request failed after retries:', error);
+      throw error;
+    }
+  }
 
 // Create and export a singleton instance
 export const scraper = new NorthDataScraper();

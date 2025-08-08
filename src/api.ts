@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { scraper, SearchResult, SuggestionsResult, PageContentResult } from './scraper';
+import { scraper, SearchResult, SuggestionsResult, PageContentResult, NetworkSvgResult } from './scraper';
 import { Queue } from './queue';
 import config from './config';
 
@@ -10,6 +10,7 @@ const app = express();
 const searchQueue = new Queue<SearchResult>();
 const suggestionsQueue = new Queue<SuggestionsResult>();
 const pageContentQueue = new Queue<PageContentResult>();
+const networkSvgQueue = new Queue<NetworkSvgResult>();
 
 // Middleware for parsing JSON
 app.use(express.json());
@@ -23,7 +24,9 @@ app.get('/health', (req: Request, res: Response) => {
     pageContentQueueSize: pageContentQueue.size,
     searchQueueProcessing: searchQueue.isProcessing,
     suggestionsQueueProcessing: suggestionsQueue.isProcessing,
-    pageContentQueueProcessing: pageContentQueue.isProcessing,
+      pageContentQueueProcessing: pageContentQueue.isProcessing,
+      networkSvgQueueSize: networkSvgQueue.size,
+      networkSvgQueueProcessing: networkSvgQueue.isProcessing,
   });
 });
 
@@ -62,6 +65,54 @@ app.get('/page', async (req: Request, res: Response) => {
     
     res.status(500).json({
       error: 'Page content request failed',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+// Network SVG endpoint
+app.get('/network-svg', async (req: Request, res: Response) => {
+  try {
+    const url = req.query.url as string;
+
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({
+        error: 'Invalid request: url parameter is required and must be a string',
+      });
+    }
+
+    if (!url.startsWith('https://www.northdata.de/')) {
+      return res.status(400).json({
+        error: 'Invalid request: URL must be from northdata.de',
+      });
+    }
+
+    console.log(`Received network SVG request for: ${url}`);
+
+    const result = await networkSvgQueue.enqueue(async () => {
+      return await scraper.getNetworkSvg(url);
+    });
+
+    // Provide SVG either as JSON or raw XML depending on Accept header
+    const wantsXml = (req.headers.accept || '').includes('image/svg+xml');
+    if (wantsXml) {
+      const asAttachment = (req.query.attachment as string) === 'true';
+      const filename = (req.query.filename as string) || 'network.svg';
+      if (asAttachment) {
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      }
+      res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+      return res.status(200).send(result.svg);
+    }
+
+    res.status(200).json({
+      url: result.url,
+      svg: result.svg,
+    });
+  } catch (error) {
+    console.error('Network SVG request failed:', error);
+    res.status(500).json({
+      error: 'Network SVG request failed',
       message: error instanceof Error ? error.message : String(error),
     });
   }
