@@ -308,9 +308,13 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       const scripts = sectionClone.querySelectorAll('script');
       scripts.forEach(script => script.remove());
       
-      // Remove all style tags
+      // Remove all style tags, EXCEPT those inside SVG (they may contain marker/arrow styles)
       const styles = sectionClone.querySelectorAll('style');
-      styles.forEach(style => style.remove());
+      styles.forEach(style => {
+        if (!style.closest('svg')) {
+          style.remove();
+        }
+      });
       
       // =========================================================================
       // == CHANGE REVERTED: Remove styles and classes from ALL elements again.
@@ -318,17 +322,29 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       // This section is now identical to your original code, removing inline
       // styles and classes from every element, including SVGs.
       
-      // Remove all inline styles
+      // Remove all inline styles, EXCEPT inside SVG (SVG may encode geometry/visibility via style)
       const elementsWithStyle = sectionClone.querySelectorAll('[style]');
-      elementsWithStyle.forEach(el => el.removeAttribute('style'));
+      elementsWithStyle.forEach(el => {
+        if (!el.closest('svg')) {
+          el.removeAttribute('style');
+        }
+      });
       
-      // Remove all class attributes (which often reference CSS)
+      // Remove all class attributes, EXCEPT inside SVG (classes are needed to keep node/link semantics)
       const elementsWithClass = sectionClone.querySelectorAll('[class]');
-      elementsWithClass.forEach(el => el.removeAttribute('class'));
+      elementsWithClass.forEach(el => {
+        if (!el.closest('svg')) {
+          el.removeAttribute('class');
+        }
+      });
 
-      // Remove all links (a tags) but keep their text content
+      // Remove all links (a tags) but keep their text content,
+      // EXCEPT links inside SVG (SVG <a> often wrap nodes with transforms)
       const links = sectionClone.querySelectorAll('a');
       links.forEach(link => {
+        if (link.closest('svg')) {
+          return; // keep SVG links intact
+        }
         if (link.textContent) {
           const textNode = document.createTextNode(link.textContent);
           link.parentNode?.replaceChild(textNode, link);
@@ -357,18 +373,28 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       const iframes = sectionClone.querySelectorAll('iframe');
       iframes.forEach(iframe => iframe.remove());
       
-      // Remove all event handlers (onclick, onmouseover, etc.)
+      // Remove all event handlers (onclick, onmouseover, etc.) and some attrs,
+      // but PRESERVE critical attributes inside SVG (id, href/xlink:href, target)
       const allElements = sectionClone.querySelectorAll('*');
       allElements.forEach(el => {
+        const isInSvg = !!el.closest('svg');
         const attributes = Array.from(el.attributes);
         attributes.forEach(attr => {
-          if (attr.name.startsWith('on') || 
-              attr.name === 'href' || 
-              attr.name === 'src' || 
-              attr.name === 'id' || 
-              attr.name === 'target' || 
-              attr.name === 'rel') {
-            el.removeAttribute(attr.name);
+          const name = attr.name;
+          const isEventHandler = name.startsWith('on');
+          const isHref = name === 'href' || name === 'xlink:href';
+          const isSrc = name === 'src';
+          const isId = name === 'id';
+          const isTarget = name === 'target';
+          const isRel = name === 'rel';
+          if (isEventHandler) {
+            el.removeAttribute(name);
+            return;
+          }
+          if (!isInSvg) {
+            if (isHref || isSrc || isId || isTarget || isRel) {
+              el.removeAttribute(name);
+            }
           }
         });
       });
