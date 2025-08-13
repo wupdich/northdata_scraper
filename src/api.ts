@@ -52,10 +52,11 @@ app.get('/page', async (req: Request, res: Response) => {
       return await scraper.getPageContent(url);
     });
 
-    // Return the HTML content
+    // Return the HTML content plus optional network PNG
     res.status(200).json({
       url: result.url,
       html: result.html,
+      networkPngDataUrl: result.networkPngDataUrl,
     });
   } catch (error) {
     console.error('Page content request failed:', error);

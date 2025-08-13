@@ -142,6 +142,8 @@ export interface SuggestionsResult {
 export interface PageContentResult {
   html: string;
   url: string;
+  // Base64 data URL for the network SVG rendered as PNG, if found
+  networkPngDataUrl?: string;
 }
 
 export class NorthDataScraper {
@@ -286,6 +288,42 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
     // Add a small static delay to ensure final rendering is complete.
     await new Promise(resolve => setTimeout(resolve, 1000));
 
+    // Try to extract the network SVG as a PNG first (optional)
+    let networkPngDataUrl: string | undefined;
+    try {
+      // Wait briefly for the SVG to be present
+      await page.waitForSelector('svg[aria-label="Netzwerk"]', { timeout: 5000 });
+      const svgHandle = await page.$('svg[aria-label="Netzwerk"]');
+      if (svgHandle) {
+        // Ensure the element is scrolled into view
+        await svgHandle.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
+
+        // Optionally expand viewport to fit the SVG
+        const bbox = await svgHandle.boundingBox();
+        if (bbox) {
+          const desiredWidth = Math.ceil(Math.max(1280, bbox.width));
+          const desiredHeight = Math.ceil(Math.max(800, bbox.height));
+          const currentViewport = page.viewport();
+          if (
+            !currentViewport ||
+            currentViewport.width < desiredWidth ||
+            currentViewport.height < desiredHeight
+          ) {
+            await page.setViewport({ width: desiredWidth, height: desiredHeight });
+          }
+        }
+
+        // Take a PNG screenshot of the SVG element
+        const pngBase64 = await svgHandle.screenshot({ type: 'png', encoding: 'base64' });
+        if (typeof pngBase64 === 'string' && pngBase64.length > 0) {
+          networkPngDataUrl = `data:image/png;base64,${pngBase64}`;
+        }
+      }
+    } catch (e) {
+      // Non-fatal: continue without PNG if not found
+      console.warn('Network SVG PNG capture skipped or failed:', e);
+    }
+
     // Extract only the main content section and clean the HTML
     const cleanedHtml = await page.evaluate(() => {
       // Find the main content section
@@ -424,6 +462,7 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
     return {
       html: cleanedHtml,
       url: currentUrl,
+      networkPngDataUrl,
     };
   } catch (error) {
     await page.close();
