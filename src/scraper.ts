@@ -505,8 +505,8 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       // Login if not already logged in
       await this.login(page);
 
-      // Construct the suggestions URL
-      const suggestUrl = `https://www.northdata.de/suggest.json?query=${encodeURIComponent(query)}&countries=DE`;
+      // Construct the suggestions URL (no country filter to allow international results)
+      const suggestUrl = `https://www.northdata.de/suggest.json?query=${encodeURIComponent(query)}`;
 
       // Navigate to the suggestions URL
       await navigateAndWait(page, suggestUrl);
