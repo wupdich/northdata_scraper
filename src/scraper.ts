@@ -570,27 +570,10 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       // Login if not already logged in
       await this.login(page);
 
-      // Navigate to search page
-      await navigateAndWait(page, 'https://www.northdata.de/');
-
-      // Type search query with human-like typing using XPath
-      const searchInputXPath = '/html/body/main/div/div/div/form/div/input';
-      await typeHumanLike(page, searchInputXPath, query);
-
-      // Small pause before submitting search
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Submit search form using XPath
-      const searchButtonXPath = '/html/body/main/div/div/div/form/div/button';
-
-      // Click the search button and wait for navigation
-      await Promise.all([
-        clickByXPath(page, searchButtonXPath),
-        page.waitForNavigation({
-          timeout: config.browser.timeout,
-          waitUntil: config.browser.waitForNetworkIdle ? 'networkidle2' as const : 'load' as const,
-        }),
-      ]);
+      // Navigate directly to the search results URL constructed from the query
+      // Example: https://www.northdata.de/Ziel%20Home%20Furnishing%20Technology%20Co.%2C%20Ltd.
+      const searchUrl = `https://www.northdata.de/${encodeURIComponent(query)}`;
+      await navigateAndWait(page, searchUrl);
 
       // Additional wait for network idle
       if (config.browser.waitForNetworkIdle) {
@@ -598,12 +581,12 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       }
 
       // Wait for search results to load
-      await page.waitForSelector('.search-results', { timeout: config.browser.timeout });
+      await page.waitForSelector('.search-results .ui.feed', { timeout: config.browser.timeout });
 
-      // Extract search results HTML
+      // Extract only the listing section (feed with result items and links)
       const resultsHtml = await page.evaluate(() => {
-        const resultsElement = document.querySelector('.search-results');
-        return resultsElement ? resultsElement.outerHTML : '';
+        const feedElement = document.querySelector('.search-results .ui.feed');
+        return feedElement ? feedElement.outerHTML : '';
       });
 
       const currentUrl = page.url();
