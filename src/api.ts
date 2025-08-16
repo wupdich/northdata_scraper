@@ -120,6 +120,9 @@ app.post('/search', async (req: Request, res: Response) => {
       query,
       url: result.url,
       html: result.html,
+      isSearchResult: result.isSearchResult,
+      isDirectLink: result.isDirectLink,
+      directUrl: result.directUrl,
     });
   } catch (error) {
     console.error('Search request failed:', error);

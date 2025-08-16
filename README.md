@@ -39,7 +39,19 @@ POST /search
 Content-Type: application/json
 Body: {"query": "Company Name"}
 ```
-Returns HTML content of search results.
+Returns JSON with either the search results listing or an indication that the URL directly resolved to a company page.
+
+Response shape:
+```
+{
+  "query": "...",
+  "url": "<final navigated URL>",
+  "html": "<only the .search-results .ui.feed HTML when available>",
+  "isSearchResult": true|false,
+  "isDirectLink": true|false,
+  "directUrl": "<present only when isDirectLink is true>"
+}
+```
 
 ### Suggestions
 ```

@@ -132,6 +132,9 @@ async function navigateAndWait(page: Page, url: string): Promise<void> {
 export interface SearchResult {
   html: string;
   url: string;
+  isSearchResult: boolean;
+  isDirectLink: boolean;
+  directUrl?: string;
 }
 
 export interface SuggestionsResult {
@@ -580,13 +583,30 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
         await new Promise(resolve => setTimeout(resolve, config.browser.networkIdleTimeout));
       }
 
-      // Wait for search results to load
-      await page.waitForSelector('.search-results .ui.feed', { timeout: config.browser.timeout });
+      // Wait until either search results OR a company profile header appears
+      await page.waitForFunction(() => {
+        return (
+          !!document.querySelector('.search-results .ui.feed') ||
+          !!document.querySelector('h1.ui.header.large.qualified') ||
+          !!document.querySelector('h1.ui.header')
+        );
+      }, { timeout: config.browser.timeout });
 
-      // Extract only the listing section (feed with result items and links)
-      const resultsHtml = await page.evaluate(() => {
-        const feedElement = document.querySelector('.search-results .ui.feed');
-        return feedElement ? feedElement.outerHTML : '';
+      // Briefly wait for search results feed in case header appeared first
+      try {
+        await page.waitForSelector('.search-results .ui.feed', { timeout: 2000 });
+      } catch (_) {
+        // ignore; may be a direct link page
+      }
+
+      // Determine page type and extract relevant HTML if search results
+      const { isSearchResult, resultsHtml } = await page.evaluate(() => {
+        const feedElement = document.querySelector('.search-results .ui.feed') as HTMLElement | null;
+        const hasSearchResults = !!feedElement;
+        return {
+          isSearchResult: hasSearchResults,
+          resultsHtml: hasSearchResults ? feedElement!.outerHTML : ''
+        };
       });
 
       const currentUrl = page.url();
@@ -599,6 +619,9 @@ public async getPageContent(url: string, retryCount = 0): Promise<PageContentRes
       return {
         html: resultsHtml,
         url: currentUrl,
+        isSearchResult,
+        isDirectLink: !isSearchResult,
+        directUrl: !isSearchResult ? currentUrl : undefined,
       };
     } catch (error) {
       await page.close();
